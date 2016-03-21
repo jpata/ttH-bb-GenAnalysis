@@ -1,0 +1,13 @@
+<use   name="root"/>
+<use   name="roottmva"/>
+<use   name="rootcore"/>
+<use   name="rootmath"/>
+<use   name="rootminuit2"/>
+<use   name="classlib"/>
+<use   name="boost"/>
+<use   name="lhapdf"/>
+<use   name="hepmc"/>
+<use   name="fastjet"/>
+
+<use   name="TTH/CommonClassifier"/>
+<use   name="TTH/MEIntegratorStandalone"/>

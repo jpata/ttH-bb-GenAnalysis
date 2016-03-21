@@ -1,0 +1,14 @@
+<use   name="root"/>
+<use   name="rootcore"/>
+<use   name="rootmath"/>
+<use   name="rootminuit"/>
+<use   name="rootminuit2"/>
+<use   name="classlib"/>
+<use   name="hepmc"/>
+<use   name="fastjet"/>
+<use   name="boost"/>
+<use   name="lhapdf"/>
+<use   name="TTH/MEIntegratorStandalone"/>
+<use   name="TTH/CommonClassifier"/>
+<bin name="GenLevel" file="GenLevel.cc"></bin>
+<Flags CXXFLAGS="-g"/>
