@@ -1,4 +1,4 @@
 <lcgdict>
         <class name="HepMC::IO_GenEvent"/>
-        <class name="TTHGenLevel::Particles"/>
+        <class name="TTHGenLevel::Utility"/>
 </lcgdict>

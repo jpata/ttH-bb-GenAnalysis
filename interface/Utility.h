@@ -7,12 +7,15 @@
 #include "fastjet/ClusterSequence.hh"
 
 namespace TTHGenLevel {
-class Particles {
+class Utility {
 public:
     static bool is_final_state( const HepMC::GenParticle* p );
-    static std::vector<HepMC::GenParticle> get_vector(HepMC::GenEvent* evt);
+    static std::vector<HepMC::GenParticle> GenEvent_get_particles(HepMC::GenEvent* evt);
 
-    Particles() {
+    Utility() {
+    
+    }
+    ~Utility() {
     
     }
 };
