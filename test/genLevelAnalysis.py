@@ -321,7 +321,7 @@ class MEMAnalyzer(Analyzer):
                 tf.SetNpx(10000)
                 tf.SetRange(0, 500)
                 self.cfg.set_tf_global(fl2, nb, tf)
-        cfg.transfer_function_method = ROOT.MEM.TFMethod.External;
+        cfg.transfer_function_method = ROOT.MEM.TFMethod.External
 
 
         self.tf_formula = {}
