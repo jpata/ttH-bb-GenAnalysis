@@ -321,7 +321,7 @@ class MEMAnalyzer(Analyzer):
                 tf.SetNpx(10000)
                 tf.SetRange(0, 500)
                 self.cfg.set_tf_global(fl2, nb, tf)
-        cfg.transfer_function_method = ROOT.MEM.TFMethod.External;
+        cfg.transfer_function_method = ROOT.MEM.TFMethod.External
 
 
         self.tf_formula = {}
@@ -344,6 +344,9 @@ class MEMAnalyzer(Analyzer):
 
     def process(self, event):
         for interp_name, interp in event.interpretations.items():
+            interp.result_tth = ROOT.MEM.MEMOutput()
+            interp.result_ttbb = ROOT.MEM.MEMOutput()
+
             if interp.is_sl() and interp.is_022():
                 print "calling MEM", interp_name, interp.b_quarks
                 
@@ -516,11 +519,18 @@ if __name__ == "__main__":
         option='recreate'
     )
 
+    fns = os.environ["FILE_NAMES"].split()
+    if len(fns) != 1:
+        raise Exception("need only one file")
+    dataset = os.environ["DATASETPATH"]
+    firstEvent = int(os.environ["SKIP_EVENTS"])
+    nEvents = int(os.environ["MAX_EVENTS"])
+    
     config = cfg.Config(
         #Run across these inputs
         components = [cfg.Component(
-            "S_dec_had",
-            files = ["/home/joosep/joosep-mac/Downloads/S_dec_had_1.hepmc2g"],
+            dataset,
+            files = fns,
         )],
         sequence = sequence,
         services = [output_service],
@@ -531,7 +541,8 @@ if __name__ == "__main__":
         'Loop',
         config,
         nPrint = 0,
-        nEvents = 5
+        firstEvent = firstEvent,
+        nEvents = nEvents
     )
     looper.loop()
     looper.write()
