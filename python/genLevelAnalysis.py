@@ -13,8 +13,14 @@ ROOT.gInterpreter.ProcessLine("fastjet::ClusterSequence(std::vector<fastjet::Pse
 
 from TTH.GenLevel.eventsgen import Events
 from TTH.MEAnalysis.MEMUtils import set_integration_vars, add_obj
+from TTH.MEAnalysis.MEMConfig import MEMConfig
+
 from PhysicsTools.HeppyCore.framework.analyzer import Analyzer
 from PhysicsTools.Heppy.analyzers.core.AutoFillTreeProducer import *
+from PhysicsTools.HeppyCore.utils.deltar import matchObjectCollection
+
+CvectorPSVar = getattr(ROOT, "std::vector<MEM::PSVar::PSVar>")
+CvectorPermutations = getattr(ROOT, "std::vector<MEM::Permutations::Permutations>")
 
 #wrappers for functions we can't call from python
 #make a function which increments an iterator, we can't easily do in python
@@ -24,25 +30,49 @@ ROOT.gInterpreter.ProcessLine("namespace Util { HepMC::GenVertex::particle_itera
 ROOT.gInterpreter.ProcessLine("namespace Util { HepMC::GenParticle* get_particle(HepMC::GenEvent::particle_const_iterator it) {return *it;}; } ")
 ROOT.gInterpreter.ProcessLine("namespace Util { HepMC::GenParticle* get_particle(HepMC::GenVertex::particle_iterator it) {return *it;}; } ")
 
-#constants
-MIN_PT = 0.0001
-JET_MIN_PT_CLUSTERING = 10
-JET_MIN_PT = 30
-JET_DEF = ROOT.fastjet.JetDefinition(ROOT.fastjet.antikt_algorithm, 0.5)
+#Needed to correctly unpickle, otherwise
+#   File "/opt/cms/slc6_amd64_gcc530/lcg/root/6.06.00-ikhhed4/lib/ROOT.py", line 303, in _importhook
+#     return _orig_ihook( name, *args, **kwds )
+# ImportError: No module named TFClasses
+import TTH.MEAnalysis.TFClasses as TFClasses
+sys.modules["TFClasses"] = TFClasses
 
-def lepton_selection(particle):
+pi_file = open(os.environ["CMSSW_BASE"]+"/src/TTH/MEAnalysis/data/transfer_functions.pickle" , 'rb')
+tf_matrix = pickle.load(pi_file)
+pi_file.close()
+
+class Conf:
+    jets = {
+        "pt": 30,
+        "eta": 2.1,
+        "pt_clustering": 10,
+        "def":  "ROOT.fastjet.JetDefinition(ROOT.fastjet.antikt_algorithm, 0.5)"
+    }
+
+    leptons = {
+        "pt": 30,
+        "eta": 2.1
+    }
+
+    mem = {
+        "n_integration_points_mult": 0.1
+    }
+
+    tf_matrix = tf_matrix
+
+def lepton_selection(particle, conf=Conf):
     """
     Baseline lepton selection
     """
     p4 = particle.p4()
-    return p4.Pt() > 30 and abs(p4.Eta())<2.1
+    return p4.Pt() > conf.leptons["pt"] and abs(p4.Eta())<conf.leptons["eta"]
 
 #FIXME
-def jet_selection(jet):
+def jet_selection(jet, conf=Conf):
     """
     Baseline jet selection
     """
-    return jet.p4().Pt() > JET_MIN_PT and abs(jet.p4().Eta())<2.1
+    return jet.p4().Pt() > conf.jets["pt"] and abs(jet.p4().Eta())<conf.jets["eta"]
 
 class Particle(object):
 
@@ -126,7 +156,7 @@ class GenJet:
     def phi(self):
         return self.p4().Phi()
 
-def cluster_jets(genparticles):
+def cluster_jets(genparticles, conf=Conf):
     src_particles = ROOT.std.vector("fastjet::PseudoJet")()
     for x in genparticles:
         p4 = x.physObj.momentum()
@@ -134,14 +164,14 @@ def cluster_jets(genparticles):
             p4.px(), p4.py(), p4.pz(), p4.e(), 
         ))
 
-    cs = ROOT.fastjet.ClusterSequence(src_particles, JET_DEF)
+    cs = ROOT.fastjet.ClusterSequence(src_particles, eval(conf.jets["def"]))
 
     ret = []
-    for x in sorted(cs.inclusive_jets(JET_MIN_PT_CLUSTERING), key=lambda x: x.pt(), reverse=True):
+    for x in sorted(cs.inclusive_jets(conf.jets["pt_clustering"]), key=lambda x: x.pt(), reverse=True):
         gj = GenJet(ROOT.TLorentzVector(x.px(), x.py(), x.pz(), x.e()))
 
         #fastjet seems to produce spurious jets with pt=0, eta=100000
-        if x.pt() > JET_MIN_PT_CLUSTERING:
+        if x.pt() > conf.jets["pt_clustering"]:
             ret += [gj]
     return ret
 
@@ -151,14 +181,17 @@ class EventInterpretation(object):
         self.b_quarks = kwargs.get("b_quarks", [])
         self.l_quarks = kwargs.get("l_quarks", [])
         self.leptons = kwargs.get("leptons", [])
-        self.invisible = kwargs.get("invisible", [])
+        self.invisible = kwargs.get("invisible", ROOT.TLorentzVector())
+        self.hypo = kwargs.get("hypo")
 
     def is_sl(self):
         return len(self.leptons) == 1
 
-    def is_022(self):
+    def is_0w2h2t(self):
         return len(self.b_quarks) >= 4
 
+    def is_2w2h2t(self):
+        return len(self.b_quarks) >= 4 and len(self.l_quarks)>=2
 
 class ParticleAnalyzer(Analyzer):
     def __init__(self, cfg_ana, cfg_comp, looperName):
@@ -202,8 +235,6 @@ class PartonLevelAnalyzer(Analyzer):
             l_quarks = [x for x in event.l_quarks_me],
         )
         return True
-
-from PhysicsTools.HeppyCore.utils.deltar import matchObjectCollection
 
 class HadronLevelAnalyzer(Analyzer):
 
@@ -270,12 +301,6 @@ class HadronLevelAnalyzer(Analyzer):
 
         return True
 
-CvectorPSVar = getattr(ROOT, "std::vector<MEM::PSVar::PSVar>")
-CvectorPermutations = getattr(ROOT, "std::vector<MEM::Permutations::Permutations>")
-
-import TTH.MEAnalysis.TFClasses as TFClasses
-sys.modules["TFClasses"] = TFClasses
-
 def attach_jet_transfer_function(jet, tf_formula):
     """
     Attaches transfer functions to the supplied jet based on the jet eta bin.
@@ -295,74 +320,56 @@ class MEMAnalyzer(Analyzer):
 
     def __init__(self, cfg_ana, cfg_comp, looperName):
         super(MEMAnalyzer, self).__init__(cfg_ana, cfg_comp, looperName)
-        self.cfg = ROOT.MEM.MEMConfig()
-        self.cfg.defaultCfg()
- 
-        self.cplots = ROOT.TFile(os.environ["CMSSW_BASE"]+"/src/TTH/MEAnalysis/root/ControlPlotsV20.root")
-        for x,y in [
-            ("b", ROOT.MEM.DistributionType.csv_b),
-            ("c", ROOT.MEM.DistributionType.csv_c),
-            ("l", ROOT.MEM.DistributionType.csv_l),
-        ]:
-            self.cfg.add_distribution_global(
-                y,
-                self.cplots.Get(
-                    "btagCSV_{0}_pt_eta".format(x)
-                )
-            )
-
-        pi_file = open(os.environ["CMSSW_BASE"]+"/src/TTH/MEAnalysis/root/transfer_functions.pickle" , 'rb')
-        self.tf_matrix = pickle.load(pi_file)
-        pi_file.close()
-        for nb in [0, 1]:
-            for fl1, fl2 in [('b', ROOT.MEM.TFType.bLost), ('l', ROOT.MEM.TFType.qLost)]:
-                tf = self.tf_matrix[fl1][nb].Make_CDF()
-                tf.SetParameter(0, JET_MIN_PT)
-                tf.SetNpx(10000)
-                tf.SetRange(0, 500)
-                self.cfg.set_tf_global(fl2, nb, tf)
-        cfg.transfer_function_method = ROOT.MEM.TFMethod.External
-
+        self.conf = cfg_ana._conf 
+        self.cplots = ROOT.TFile(os.environ["CMSSW_BASE"]+"/src/TTH/MEAnalysis/data/ControlPlotsV20.root")
 
         self.tf_formula = {}
         for fl in ["b", "l"]:
             self.tf_formula[fl] = {}
             for bin in [0, 1]:
-                    self.tf_formula[fl][bin] = self.tf_matrix[fl][bin].Make_Formula(False)
+                    self.tf_formula[fl][bin] = self.conf.tf_matrix[fl][bin].Make_Formula(False)
+
+        self.default_cfg = self.setup_cfg_default(self.conf)
+        self.integrator = ROOT.MEM.Integrand(
+            ROOT.MEM.output,
+            self.default_cfg.cfg
+        )
+
+    @staticmethod
+    def setup_cfg_default(conf):
+        cfg = MEMConfig(conf)
+
+        cfg.configure_transfer_function(conf)
 
         strat = CvectorPermutations()
         strat.push_back(ROOT.MEM.Permutations.QQbarBBbarSymmetry)
         strat.push_back(ROOT.MEM.Permutations.QUntagged)
         strat.push_back(ROOT.MEM.Permutations.BTagged)
-        self.cfg.perm_pruning = strat
-
-        self.integrator = ROOT.MEM.Integrand(
-            ROOT.MEM.output,
-            #ROOT.MEM.output + ROOT.MEM.input + ROOT.MEM.init + ROOT.MEM.init_more + ROOT.MEM.event,
-            self.cfg
-        )
+        cfg.cfg.perm_pruning = strat
+        return cfg
 
     def process(self, event):
         for interp_name, interp in event.interpretations.items():
             interp.result_tth = ROOT.MEM.MEMOutput()
             interp.result_ttbb = ROOT.MEM.MEMOutput()
 
-            if interp.is_sl() and interp.is_022():
-                print "calling MEM", interp_name, interp.b_quarks
+            if interp.is_sl():
+                self.integrator.set_cfg(getattr(interp, "mem_cfg", self.default_cfg).cfg)
+
+                print "calling MEM", interp_name, [q.p4().Pt() for q in interp.b_quarks]
                 
                 #Create an empty vector for the integration variables
                 vars_to_integrate   = CvectorPSVar()
                 vars_to_marginalize = CvectorPSVar()
-
-                vars_to_integrate.clear()
-                vars_to_marginalize.clear()
-                self.integrator.set_cfg(self.cfg)
-
-                set_integration_vars(
-                    vars_to_integrate,
-                    vars_to_marginalize,
-                    ["0w2h2t"]
-                )
+                
+                if interp.hypo == "0w2h2t":
+                    if not inter.is_0w2h2t():
+                        raise Exception("Incorrect hypo")
+                    set_integration_vars(
+                        vars_to_integrate,
+                        vars_to_marginalize,
+                        ["0w2h2t"]
+                    )
 
                 for jet in interp.b_quarks:
                     attach_jet_transfer_function(jet, self.tf_formula)
@@ -372,8 +379,20 @@ class MEMAnalyzer(Analyzer):
                         p4s=(jet.p4().Pt(), jet.p4().Eta(), jet.p4().Phi(), jet.p4().M()),
                         obs_dict={
                             ROOT.MEM.Observable.BTAG: 1,
-                            ROOT.MEM.Observable.CSV: 0,
-                            ROOT.MEM.Observable.PDGID: 0,
+                            },
+                        tf_dict={
+                            ROOT.MEM.TFType.bReco: jet.tf_b,
+                            ROOT.MEM.TFType.qReco: jet.tf_l,
+                        }
+                    )
+                for jet in interp.l_quarks:
+                    attach_jet_transfer_function(jet, self.tf_formula)
+                    add_obj(
+                        self.integrator,
+                        ROOT.MEM.ObjectType.Jet,
+                        p4s=(jet.p4().Pt(), jet.p4().Eta(), jet.p4().Phi(), jet.p4().M()),
+                        obs_dict={
+                            ROOT.MEM.Observable.BTAG: 0,
                             },
                         tf_dict={
                             ROOT.MEM.TFType.bReco: jet.tf_b,
@@ -388,7 +407,6 @@ class MEMAnalyzer(Analyzer):
                         obs_dict={ROOT.MEM.Observable.CHARGE: 1.0 if lep.physObj.pdg_id()>0 else -1.0},
                     )
 
-                print "adding", interp.invisible
                 add_obj(
                     self.integrator,
                     ROOT.MEM.ObjectType.MET,
@@ -399,6 +417,7 @@ class MEMAnalyzer(Analyzer):
                 for hypo in [
                     ROOT.MEM.Hypothesis.TTH,
                     ROOT.MEM.Hypothesis.TTBB]:
+                    print "Evaluating hypo={0}".format(hypo)
                     fstate = ROOT.MEM.FinalState.LH
                     ret = self.integrator.run(
                         fstate,
@@ -447,8 +466,6 @@ metType = NTupleObjectType("metType", variables = [
 ])
 
 interp_type = NTupleObjectType("interp_type", variables = [
-    NTupleVariable("is_022", lambda x : x.is_022(), type=int),
-    NTupleVariable("is_sl", lambda x : x.is_sl(), type=int),
     NTupleVariable("mem_p_tth", lambda x : x.result_tth.p),
     NTupleVariable("mem_p_ttbb", lambda x : x.result_ttbb.p),
 ])
