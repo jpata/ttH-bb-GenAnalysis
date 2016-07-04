@@ -5,6 +5,7 @@ import sys, os, pickle
 
 from PhysicsTools.HeppyCore.framework.chain import Chain as Events
 from TTH.MEAnalysis.MEMUtils import set_integration_vars, add_obj
+from TTH.MEAnalysis.samples_base import getSitePrefix
 from PhysicsTools.HeppyCore.framework.analyzer import Analyzer
 from PhysicsTools.Heppy.analyzers.core.AutoFillTreeProducer import *
 from TTH.GenLevel.genLevelAnalysis import MEMAnalyzer, EventInterpretation, interp_type, Conf, genParticleType
@@ -88,7 +89,7 @@ class GenQuarkLevelAnalyzer(Analyzer):
         interp.mem_cfg = MEMAnalyzer.setup_cfg_default(self.conf)
         #disable transfer functions for the gen particles
         interp.mem_cfg.cfg.int_code -= ROOT.MEM.IntegrandType.Transfer
-        #event.interpretations["gen_b_quark"] = interp
+        event.interpretations["gen_b_quark"] = interp
 
         interp = EventInterpretation(
             b_quarks = event.gen_b_h + event.gen_b_t,
@@ -119,7 +120,7 @@ class GenJetLevelAnalyzer(Analyzer):
                     p.p4().Pt(), p.pdg_id(), matches[p].p4().Pt(), matches[p].pdg_id())
             else:
                 print "{0} not matched".format(p.p4().Pt())
-
+        
         interp = EventInterpretation(
             b_quarks = event.matched_b_jets,
             leptons = event.gen_lep,
@@ -129,7 +130,7 @@ class GenJetLevelAnalyzer(Analyzer):
         interp.mem_cfg = MEMAnalyzer.setup_cfg_default(self.conf)
         #disable transfer functions for the gen particles
         interp.mem_cfg.cfg.int_code -= ROOT.MEM.IntegrandType.Transfer
-        #event.interpretations["gen_b_jet"] = interp
+        event.interpretations["gen_b_jet"] = interp
 
         matches = matchObjectCollection(event.gen_q_w, event.gen_jet, 0.3)
         event.matched_q_jets = []
@@ -193,10 +194,10 @@ if __name__ == "__main__":
         globalVariables = [
         ],
         globalObjects = {
-            #"interp_gen_b_quark" : NTupleObject("interp_gen_b_quark", interp_type, help="only 4 b-quarks interpretation"),
+            "interp_gen_b_quark" : NTupleObject("interp_gen_b_quark", interp_type, help="only 4 b-quarks interpretation"),
             "interp_gen_b_q_quark" : NTupleObject("interp_gen_b_q_quark", interp_type, help="4 b-quarks, 2 light quarks interpretation"),
             "interp_gen_b_q_jet" : NTupleObject("interp_gen_b_q_jet", interp_type, help="4 b-quarks, 2 light quarks interpretation"),
-            #"interp_gen_b_jet" : NTupleObject("interp_gen_b_jet", interp_type, help="only 4 b-jet interpretation, matched to b-quarks"),
+            "interp_gen_b_jet" : NTupleObject("interp_gen_b_jet", interp_type, help="only 4 b-jet interpretation, matched to b-quarks"),
         },
         collections = {
             "gen_b_h" : NTupleCollection("gen_b_h", genParticleType, 3, help="generated quarks from H"),
@@ -223,6 +224,7 @@ if __name__ == "__main__":
     )
 
     fns = os.environ["FILE_NAMES"].split()
+    fns = map(getSitePrefix, fns)
     dataset = os.environ["DATASETPATH"]
     firstEvent = int(os.environ["SKIP_EVENTS"])
     nEvents = int(os.environ["MAX_EVENTS"])
@@ -232,6 +234,7 @@ if __name__ == "__main__":
         components = [cfg.Component(
             dataset,
             files = fns,
+            tree_name = "vhbb/tree"
         )],
         sequence = sequence,
         services = [output_service],

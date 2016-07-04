@@ -363,7 +363,7 @@ class MEMAnalyzer(Analyzer):
                 vars_to_marginalize = CvectorPSVar()
                 
                 if interp.hypo == "0w2h2t":
-                    if not inter.is_0w2h2t():
+                    if not interp.is_0w2h2t():
                         raise Exception("Incorrect hypo")
                     set_integration_vars(
                         vars_to_integrate,
