@@ -5,6 +5,8 @@ ROOT.gSystem.Load("libTTHCommonClassifier.so")
 ROOT.gSystem.Load("libTTHGenLevel.so")
 import ROOT.HepMC
 import sys, os, pickle
+import logging
+import numpy as np
 
 #fastjet setup
 ROOT.gSystem.Load("libfastjet")
@@ -41,38 +43,42 @@ pi_file = open(os.environ["CMSSW_BASE"]+"/src/TTH/MEAnalysis/data/transfer_funct
 tf_matrix = pickle.load(pi_file)
 pi_file.close()
 
-class Conf:
-    jets = {
-        "pt": 30,
-        "eta": 2.1,
-        "pt_clustering": 10,
-        "def":  "ROOT.fastjet.JetDefinition(ROOT.fastjet.antikt_algorithm, 0.5)"
-    }
+class Conf(dict):
+    def __getattr__(self, x):
+        return self[x]
 
-    leptons = {
-        "pt": 30,
-        "eta": 2.1
-    }
+conf = Conf()
+conf["jets"] = {
+    "pt": 20,
+    "eta": 2.1,
+    "pt_clustering": 10,
+    "def":  "ROOT.fastjet.JetDefinition(ROOT.fastjet.antikt_algorithm, 0.5)"
+}
 
-    mem = {
-        "n_integration_points_mult": 0.1
-    }
+conf["leptons"] = {
+    "pt": 30,
+    "eta": 2.1
+}
 
-    tf_matrix = tf_matrix
+conf["mem"] = {
+"n_integration_points_mult": 0.1
+}
 
-def lepton_selection(particle, conf=Conf):
+conf["tf_matrix"] = tf_matrix
+
+def lepton_selection(particle, conf=conf):
     """
     Baseline lepton selection
     """
     p4 = particle.p4()
-    return p4.Pt() > conf.leptons["pt"] and abs(p4.Eta())<conf.leptons["eta"]
+    return p4.Pt() > conf["leptons"]["pt"] and abs(p4.Eta())<conf["leptons"]["eta"]
 
 #FIXME
-def jet_selection(jet, conf=Conf):
+def jet_selection(jet, conf=conf):
     """
     Baseline jet selection
     """
-    return jet.p4().Pt() > conf.jets["pt"] and abs(jet.p4().Eta())<conf.jets["eta"]
+    return jet.p4().Pt() > conf["jets"]["pt"] and abs(jet.p4().Eta())<conf["jets"]["eta"]
 
 class Particle(object):
 
@@ -156,7 +162,7 @@ class GenJet:
     def phi(self):
         return self.p4().Phi()
 
-def cluster_jets(genparticles, conf=Conf):
+def cluster_jets(genparticles, conf=conf):
     src_particles = ROOT.std.vector("fastjet::PseudoJet")()
     for x in genparticles:
         p4 = x.physObj.momentum()
@@ -164,25 +170,36 @@ def cluster_jets(genparticles, conf=Conf):
             p4.px(), p4.py(), p4.pz(), p4.e(), 
         ))
 
-    cs = ROOT.fastjet.ClusterSequence(src_particles, eval(conf.jets["def"]))
+    cs = ROOT.fastjet.ClusterSequence(src_particles, eval(conf["jets"]["def"]))
 
     ret = []
-    for x in sorted(cs.inclusive_jets(conf.jets["pt_clustering"]), key=lambda x: x.pt(), reverse=True):
+    for x in sorted(cs.inclusive_jets(conf["jets"]["pt_clustering"]), key=lambda x: x.pt(), reverse=True):
         gj = GenJet(ROOT.TLorentzVector(x.px(), x.py(), x.pz(), x.e()))
 
         #fastjet seems to produce spurious jets with pt=0, eta=100000
-        if x.pt() > conf.jets["pt_clustering"]:
+        if x.pt() > conf["jets"]["pt_clustering"]:
             ret += [gj]
     return ret
 
 class EventInterpretation(object):
-
+    """Summarizes an event at the hadron level, as required for MEM evaluation
+    
+    Attributes:
+        b_quarks (list): All the considered b-quarks
+        hypo (TYPE): hypothesis
+        invisible (TLorenzVector): the MET 
+        l_quarks (list): All the considered light quarks
+        leptons (list): All the considered leptons
+    """
     def __init__(self, **kwargs):
         self.b_quarks = kwargs.get("b_quarks", [])
         self.l_quarks = kwargs.get("l_quarks", [])
         self.leptons = kwargs.get("leptons", [])
         self.invisible = kwargs.get("invisible", ROOT.TLorentzVector())
         self.hypo = kwargs.get("hypo")
+        self.result_tth = ROOT.MEM.MEMOutput()
+        self.result_ttbb = ROOT.MEM.MEMOutput()
+        self.was_calculated = False
 
     def is_sl(self):
         return len(self.leptons) == 1
@@ -193,6 +210,22 @@ class EventInterpretation(object):
     def is_2w2h2t(self):
         return len(self.b_quarks) >= 4 and len(self.l_quarks)>=2
 
+    def __str__(self):
+        s = "Interpretation\n"
+        s += "  Nb={0} Nq={1} Nl={2}\n".format(
+            len(self.b_quarks),
+            len(self.l_quarks),
+            len(self.leptons)
+        )
+        s += "  hypo={0}\n".format(self.hypo)
+        for q in self.b_quarks:
+            s += "  b: {0}\n".format(q)
+        for q in self.l_quarks:
+            s += "  q: {0}\n".format(q)
+        for q in self.leptons:
+            s += "  l: {0}\n".format(q)
+        return s
+            
 class ParticleAnalyzer(Analyzer):
     def __init__(self, cfg_ana, cfg_comp, looperName):
         super(ParticleAnalyzer, self).__init__(cfg_ana, cfg_comp, looperName)
@@ -327,13 +360,14 @@ class MEMAnalyzer(Analyzer):
         for fl in ["b", "l"]:
             self.tf_formula[fl] = {}
             for bin in [0, 1]:
-                    self.tf_formula[fl][bin] = self.conf.tf_matrix[fl][bin].Make_Formula(False)
+                    self.tf_formula[fl][bin] = self.conf["tf_matrix"][fl][bin].Make_Formula(False)
 
         self.default_cfg = self.setup_cfg_default(self.conf)
         self.integrator = ROOT.MEM.Integrand(
-            ROOT.MEM.output,
+            0,
             self.default_cfg.cfg
         )
+        self.logger = logging.getLogger("MEMAnalyzer")
 
     @staticmethod
     def setup_cfg_default(conf):
@@ -350,26 +384,40 @@ class MEMAnalyzer(Analyzer):
 
     def process(self, event):
         for interp_name, interp in event.interpretations.items():
+            self.logger.info("process: interp={0}".format(str(interp)))
+
             interp.result_tth = ROOT.MEM.MEMOutput()
             interp.result_ttbb = ROOT.MEM.MEMOutput()
 
             if interp.is_sl():
                 self.integrator.set_cfg(getattr(interp, "mem_cfg", self.default_cfg).cfg)
 
-                print "calling MEM", interp_name, [q.p4().Pt() for q in interp.b_quarks]
-                
+                self.logger.info(
+                    "process is_sl " +
+                    "calling MEM name={0} b={1} q={2}".format(
+                        interp_name,
+                        [q.p4().Pt() for q in interp.b_quarks],
+                        [q.p4().Pt() for q in interp.l_quarks]
+                    )
+                )
+
                 #Create an empty vector for the integration variables
                 vars_to_integrate   = CvectorPSVar()
                 vars_to_marginalize = CvectorPSVar()
                 
                 if interp.hypo == "0w2h2t":
                     if not interp.is_0w2h2t():
-                        raise Exception("Incorrect hypo")
+                        self.logger.info("Skipping hypo")
+                        continue
                     set_integration_vars(
                         vars_to_integrate,
                         vars_to_marginalize,
                         ["0w2h2t"]
                     )
+                elif interp.hypo == "2w2h2t":
+                    if not interp.is_2w2h2t():
+                        self.logger.info("Skipping hypo")
+                        continue
 
                 for jet in interp.b_quarks:
                     attach_jet_transfer_function(jet, self.tf_formula)
@@ -417,7 +465,7 @@ class MEMAnalyzer(Analyzer):
                 for hypo in [
                     ROOT.MEM.Hypothesis.TTH,
                     ROOT.MEM.Hypothesis.TTBB]:
-                    print "Evaluating hypo={0}".format(hypo)
+                    self.logger.info("Evaluating hypo={0}".format(hypo))
                     fstate = ROOT.MEM.FinalState.LH
                     ret = self.integrator.run(
                         fstate,
@@ -425,7 +473,9 @@ class MEMAnalyzer(Analyzer):
                         vars_to_integrate,
                         vars_to_marginalize
                     )
+                    self.logger.info("p={0}".format(ret.p))
                     results[hypo] = ret
+                interp.was_calculated = True
                 interp.result_tth = results[ROOT.MEM.Hypothesis.TTH]
                 interp.result_ttbb = results[ROOT.MEM.Hypothesis.TTBB]
                 self.integrator.next_event()
@@ -466,12 +516,28 @@ metType = NTupleObjectType("metType", variables = [
 ])
 
 interp_type = NTupleObjectType("interp_type", variables = [
+    NTupleVariable("was_calculated", lambda x : x.was_calculated, type=int),
+    NTupleVariable("n_b", lambda x : len(x.b_quarks), type=int),
+    NTupleVariable("n_q", lambda x : len(x.l_quarks), type=int),
+    NTupleVariable("n_l", lambda x : len(x.leptons), type=int),
+
     NTupleVariable("mem_p_tth", lambda x : x.result_tth.p),
     NTupleVariable("mem_p_ttbb", lambda x : x.result_ttbb.p),
+    NTupleVariable("mem_num_perm_tth", lambda x : x.result_tth.num_perm),
+    NTupleVariable("mem_num_perm_ttbb", lambda x : x.result_ttbb.num_perm),
+    NTupleVariable("mem_time_tth", lambda x : x.result_tth.time),
+    NTupleVariable("mem_time_ttbb", lambda x : x.result_ttbb.time),
 ])
 
 def fillCoreVariables(self, tr, event, isMC):
-    pass
+    if isMC:
+        for x in ["run", "lumi", "evt", "xsec", "genWeight"]:
+            tr.fill(x, getattr(event.input, x))
+    else:
+        for x in ["run", "lumi", "evt"]:
+            tr.fill(x, getattr(event.input, x))
+    tr.fill("isData", not isMC)
+    tr.fill("intLumi", 0)
 
 AutoFillTreeProducer.fillCoreVariables = fillCoreVariables
 
