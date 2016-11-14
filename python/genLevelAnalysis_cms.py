@@ -16,6 +16,27 @@ from PhysicsTools.HeppyCore.utils.deltar import matchObjectCollection
 from PhysicsTools.HeppyCore.framework.analyzer import Analyzer
 from TTH.MEAnalysis.VHbbTree import *
 
+import sys, types
+def get_refcounts():
+    d = {}
+    sys.modules
+    # collect all classes
+    for m in sys.modules.values():
+        for sym in dir(m):
+            o = getattr (m, sym)
+            if type(o) is types.ClassType:
+                d[o] = sys.getrefcount (o)
+    # sort by refcount
+    pairs = map (lambda x: (x[1],x[0]), d.items())
+    pairs.sort()
+    pairs.reverse()
+    return pairs
+
+def print_top_100():
+    print "top 100 refs"
+    for n, c in get_refcounts()[:100]:
+        print '%10d %s' % (n, c.__name__)
+
 class EventAnalyzer(Analyzer):
     def __init__(self, cfg_ana, cfg_comp, looperName):
         super(EventAnalyzer, self).__init__(cfg_ana, cfg_comp, looperName)
@@ -46,8 +67,12 @@ class Particle:
         )
 
     def __init__(self, **kwargs):
-        self.__dict__.update(kwargs)
-        self.physObj = self
+        self._p4 = kwargs.get("_p4") 
+        self._pdg_id = kwargs.get("_pdg_id") 
+        self._status = kwargs.get("_status") 
+        self._parent_id = kwargs.get("_parent_id") 
+        #self.__dict__.update(kwargs)
+        #self.physObj = self
 
     def is_final_state(self):
         return True
@@ -101,6 +126,48 @@ class EventRepresentation:
                 m_new = (1.0 + sf_scale + v_res) * obj.p4().M()
                 obj.p4().SetPtEtaPhiM(pt_new, obj.p4().Eta(), obj.p4().Phi(), m_new)
 
+    def perturb_flavour(self, effs):
+
+        b_quarks = []
+        l_quarks = []
+
+        tag_cands = []
+        for q in self.b_quarks:
+            tag_cands += [(q, "b")]
+
+        for q in self.l_quarks:
+            tag_cands += [(q, "l")]
+
+        for q, fl in tag_cands:
+            is_tagged = np.random.uniform() < effs[fl]
+            if is_tagged:
+                b_quarks += [q]
+            else:
+                l_quarks += [q]
+
+        self.b_quarks = b_quarks
+        self.l_quarks = l_quarks
+
+    def make_interpretation(self, hypo, conf):
+        if hypo == "0w2h2t":
+            interp = EventInterpretation(
+                b_quarks = self.b_quarks,
+                leptons = self.leptons,
+                invisible = self.invisible,
+                hypo = "0w2h2t"
+            )
+        elif hypo == "2w2h2t":
+            interp = EventInterpretation(
+                b_quarks = self.b_quarks,
+                l_quarks = self.l_quarks,
+                leptons = self.leptons,
+                invisible = self.invisible,
+                hypo = "2w2h2t"
+            )
+
+        interp.mem_cfg = "default"
+        return interp
+
 class GenQuarkLevelAnalyzer(Analyzer):
     def __init__(self, cfg_ana, cfg_comp, looperName):
         super(GenQuarkLevelAnalyzer, self).__init__(cfg_ana, cfg_comp, looperName)
@@ -146,36 +213,17 @@ class GenQuarkLevelAnalyzer(Analyzer):
         event.b_hadrons_sorted = sorted(b_hadrons, key=lambda x: x.p4().Pt(), reverse=True)
         event.b_hadrons_sorted = filter(lambda x: x.p4().Pt() > self.conf["jets"]["pt"], event.b_hadrons_sorted)
         event.b_hadrons_sorted = filter(lambda x: abs(x.p4().Eta()) < self.conf["jets"]["eta"], event.b_hadrons_sorted)
-        event.b_hadrons_sorted = event.b_hadrons_sorted[:6]
+        event.b_hadrons_sorted = event.b_hadrons_sorted
 
         event.repr_quarks = EventRepresentation(
-            b_quarks = event.b_hadrons_sorted,
+            b_quarks = event.b_hadrons_sorted[:6],
             l_quarks = event.gen_q_w,
             leptons = event.gen_lep,
             invisible = event.gen_met,
         )
 
-        interp = EventInterpretation(
-            b_quarks = event.repr_quarks.b_quarks,
-            leptons = event.repr_quarks.leptons,
-            invisible = event.repr_quarks.invisible,
-            hypo = "0w2h2t"
-        )
-        interp.mem_cfg = MEMAnalyzer.setup_cfg_default(self.conf)
-        event.interpretations["gen_b_quark"] = interp
-
-        ###
-        ### b-quark + light quark interpretation
-        ###
-        interp = EventInterpretation(
-            b_quarks = event.repr_quarks.b_quarks,
-            l_quarks = event.repr_quarks.l_quarks,
-            leptons = event.repr_quarks.leptons,
-            invisible = event.repr_quarks.invisible,
-            hypo = "2w2h2t"
-        )
-        interp.mem_cfg = MEMAnalyzer.setup_cfg_default(self.conf)
-        event.interpretations["gen_b_q_quark"] = interp
+        event.interpretations["gen_b_quark"] = event.repr_quarks.make_interpretation("0w2h2t", self.conf)
+        event.interpretations["gen_b_q_quark"] = event.repr_quarks.make_interpretation("2w2h2t", self.conf)
 
 class GenJetLevelAnalyzer(Analyzer):
     def __init__(self, cfg_ana, cfg_comp, looperName):
@@ -184,7 +232,6 @@ class GenJetLevelAnalyzer(Analyzer):
         self.logger = logging.getLogger("GenJetLevelAnalyzer")
 
     def process(self, event):
-
         #get all the gen-jet
         event.gen_jet = map(lambda p: Particle.from_obj(p, 0), event.GenJet)
 
@@ -205,18 +252,6 @@ class GenJetLevelAnalyzer(Analyzer):
                 self.logger.info(
                     "b-quark with pt={0:.2f} not matched to gen-jet".format(p.p4().Pt())
                 )
-        ###
-        ### b-quark only interpretations
-        ###
-        interp = EventInterpretation(
-            b_quarks = event.matched_b_jets,
-            leptons = event.gen_lep,
-            invisible = event.gen_met,
-            hypo = "0w2h2t"
-        )
-        interp.mem_cfg = MEMAnalyzer.setup_cfg_default(self.conf)
-        event.interpretations["gen_b_jet"] = interp
-
 
         #match light jets to quarks from W
         matches = matchObjectCollection(event.gen_q_w, event.gen_jet, 0.3)
@@ -227,29 +262,38 @@ class GenJetLevelAnalyzer(Analyzer):
                 self.logger.info("light quark pt={0}, id={1} matched to jet pt={2}, id={3}".format(
                     p.p4().Pt(), p.pdg_id(), matches[p].p4().Pt(), matches[p].pdg_id())
                 )
-        ###
-        ### b-quark + light quark interpretations
-        ###
-        interp = EventInterpretation(
+
+
+        event.repr_matched_jets = EventRepresentation(
             b_quarks = event.matched_b_jets,
             l_quarks = event.matched_q_jets,
             leptons = event.gen_lep,
             invisible = event.gen_met,
-            hypo = "2w2h2t"
         )
-        interp.mem_cfg = MEMAnalyzer.setup_cfg_default(self.conf)
-        event.interpretations["gen_b_q_jet"] = interp
+
+        event.interpretations["gen_b_jet"] = event.repr_matched_jets.make_interpretation("0w2h2t", self.conf)
+        event.interpretations["gen_b_q_jet"] = event.repr_matched_jets.make_interpretation("2w2h2t", self.conf)
+
+        #Variate JER
+        event.repr_matched_jets_jer10 = copy.deepcopy(event.repr_matched_jets)
+        event.repr_matched_jets_jer10.perturb_momentum(
+            res = {"b_quarks": 0.1, "l_quarks": 0.1}
+        )
+        event.interpretations["gen_b_q_jet_jer10"] = event.repr_matched_jets_jer10.make_interpretation("2w2h2t", self.conf)
+
+        #Variate jet scale
+        event.repr_matched_jets_jes10 = copy.deepcopy(event.repr_matched_jets)
+        event.repr_matched_jets_jes10.perturb_momentum(
+            scale = {"b_quarks": 0.1, "l_quarks": 0.1}
+        )
+        event.interpretations["gen_b_q_jet_jes10"] = event.repr_matched_jets_jes10.make_interpretation("2w2h2t", self.conf)
 
 
-        # event.interpretations["gen_b_q_jet_jer10"] = copy.deepcopy(interp)
-        # event.interpretations["gen_b_q_jet_jer10"].perturb_momentum(
-        #     res = {"b_quarks": 0.1, "l_quarks": 0.1}
-        # )
-
-        # event.interpretations["gen_b_q_jet_jes10"] = copy.deepcopy(interp)
-        # event.interpretations["gen_b_q_jet_jes10"].perturb_momentum(
-        #     scale = {"b_quarks": 0.1, "l_quarks": 0.1}
-        # )       
+        event.repr_matched_jets_flavour = copy.deepcopy(event.repr_matched_jets)
+        event.repr_matched_jets_flavour.perturb_flavour(
+            effs = {"b": 0.7, "l": 0.001}
+        )
+        event.interpretations["gen_b_q_jet_flavour"] = event.repr_matched_jets_flavour.make_interpretation("2w2h2t", self.conf)
 
 class OutputsAnalyzer(Analyzer):
     def __init__(self, cfg_ana, cfg_comp, looperName):
@@ -264,7 +308,7 @@ if __name__ == "__main__":
 
     import PhysicsTools.HeppyCore.framework.config as cfg
 
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.ERROR)
 
     event_ana = cfg.Analyzer(
         EventAnalyzer,
@@ -301,8 +345,9 @@ if __name__ == "__main__":
             "interp_gen_b_q_quark" : NTupleObject("I_sl_2w2h2t_q", interp_type, help="4 b-quarks, 2 light quarks interpretation"),
             "interp_gen_b_jet" : NTupleObject("I_sl_0w2h2t_j", interp_type, help="only 4 b-jet interpretation, matched to b-quarks"),
             "interp_gen_b_q_jet" : NTupleObject("I_sl_2w2h2t_j", interp_type, help="4 b-quarks, 2 light quarks interpretation"),
-            #"interp_gen_b_q_jet_jer10" : NTupleObject("I_sl_2w2h2t_j_jer10", interp_type, help="only 4 b-jet interpretation, matched to b-quarks"),
-            #"interp_gen_b_q_jet_jes10" : NTupleObject("I_sl_2w2h2t_j_jes10", interp_type, help="only 4 b-jet interpretation, matched to b-quarks"),
+            "interp_gen_b_q_jet_jer10" : NTupleObject("I_sl_2w2h2t_j_jer10", interp_type, help="only 4 b-jet interpretation, matched to b-quarks"),
+            "interp_gen_b_q_jet_jes10" : NTupleObject("I_sl_2w2h2t_j_jes10", interp_type, help="only 4 b-jet interpretation, matched to b-quarks"),
+            "interp_gen_b_q_jet_flavour" : NTupleObject("I_sl_2w2h2t_j_flavour", interp_type, help="only 4 b-jet interpretation, matched to b-quarks"),
         },
         collections = {
             "gen_b_h" : NTupleCollection("gen_b_h", genParticleType, 4, help="generated quarks from H"),
@@ -325,13 +370,13 @@ if __name__ == "__main__":
     ])
 
     from PhysicsTools.HeppyCore.framework.services.tfile import TFileService
-    output_service = cfg.Service(
-        TFileService,
-        'outputfile',
-        name="outputfile",
-        fname='tree.root',
-        option='recreate'
-    )
+    #output_service = cfg.Service(
+    #    TFileService,
+    #    'outputfile',
+    #    name="outputfile",
+    #    fname='tree.root',
+    #    option='recreate'
+    #)
 
     if os.environ.has_key("FILE_NAMES"):
         fns = os.environ["FILE_NAMES"].split()
@@ -340,10 +385,15 @@ if __name__ == "__main__":
         firstEvent = int(os.environ["SKIP_EVENTS"])
         nEvents = int(os.environ["MAX_EVENTS"])
     else:
-        fns = map(getSitePrefix, ["/store/user/jpata/tth/Sep29_v1/ttHTobb_M125_TuneCUETP8M2_ttHtranche3_13TeV-powheg-pythia8/Sep29_v1/160930_103104/0000/tree_1.root"])
-        dataset = "ttHTobb_M125_TuneCUETP8M2_ttHtranche3_13TeV-powheg-pythia8"
+        # fns = map(getSitePrefix, ["/store/user/jpata/tth/Sep29_v1/ttHTobb_M125_TuneCUETP8M2_ttHtranche3_13TeV-powheg-pythia8/Sep29_v1/160930_103104/0000/tree_1.root"])
+        # dataset = "ttHTobb_M125_TuneCUETP8M2_ttHtranche3_13TeV-powheg-pythia8"
+        # firstEvent = 0
+        # nEvents = 1000
+
+        fns = map(getSitePrefix, ["/store/user/jpata/tth/Sep29_v1/TTToSemilepton_TuneCUETP8M2_ttHtranche3_13TeV-powheg-pythia8/Sep29_v1/161005_125253/0000/tree_1.root"])
+        dataset = "TTToSemilepton_TuneCUETP8M2_ttHtranche3_13TeV-powheg-pythia8"
         firstEvent = 0
-        nEvents = 100
+        nEvents = 10000
 
     config = cfg.Config(
         #Run across these inputs
@@ -353,7 +403,8 @@ if __name__ == "__main__":
             tree_name = "vhbb/tree"
         )],
         sequence = sequence,
-        services = [output_service],
+        services = [],
+        #services = [output_service],
         events_class = Events,
     )
     from PhysicsTools.HeppyCore.framework.looper import Looper
@@ -362,7 +413,8 @@ if __name__ == "__main__":
         config,
         nPrint = 0,
         firstEvent = firstEvent,
-        nEvents = nEvents
+        nEvents = nEvents,
+        memCheckFromEvent = True
     )
     looper.loop()
     looper.write()
