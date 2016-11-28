@@ -80,74 +80,74 @@ def jet_selection(jet, conf=conf):
     """
     return jet.p4().Pt() > conf["jets"]["pt"] and abs(jet.p4().Eta())<conf["jets"]["eta"]
 
-#class Particle(object):
-#
-#    def __init__(self, physObj):
-#        self.physObj = physObj
-#
-#    def p4(self):
-#        p4 = self.physObj.momentum()
-#        return ROOT.TLorentzVector(p4.px(), p4.py(), p4.pz(), p4.e())
-#
-#    def is_final_state(self):
-#        if not self.physObj.end_vertex() and self.physObj.status() == 1:
-#            return True
-#        return False
-#
-#    def is_me(self):
-#        if self.physObj.momentum().perp() < MIN_PT:
-#            return False
-#        if self.physObj.production_vertex() != None:
-#            if (self.physObj.production_vertex().id() == 1 and
-#                self.physObj.status() == 3):
-#                return True
-#            elif (self.physObj.production_vertex().id() == 3 and
-#                self.physObj.status() == 11):
-#                return True
-#        return False
-#
-#    def is_had(self):
-#        if self.physObj.momentum().perp() < MIN_PT:
-#            return False
-#        if self.physObj.production_vertex() != None:
-#            if (self.physObj.production_vertex().id() == 4 and
-#                self.physObj.status() == 11):
-#                return True
-#        return False
-#
-#    def is_invisible(self):
-#        return self.is_final_state() and abs(self.physObj.pdg_id()) in [12, 14, 16]
-#
-#    def is_lepton(self):
-#        return abs(self.physObj.pdg_id()) in [11,13]
-#
-#    def get_parents(self):
-#        pit = self.physObj.production_vertex().particles_begin(ROOT.HepMC.parents)
-#        parents = []
-#        while True:
-#            pit = ROOT.Util.next_particle(pit)    
-#            if pit == self.physObj.production_vertex().particles_end(ROOT.HepMC.parents):
-#                break
-#            p = Particle(ROOT.Util.get_particle(pit))
-#            parents += [p]
-#        return parents
-#
-#    def __str__(self):
-#        s = "Particle(pdgId={0}, status={1}, prodVtx={2})".format(
-#            self.physObj.pdg_id(),
-#            self.physObj.status(),
-#            self.physObj.production_vertex().id() if self.physObj.production_vertex() else None
-#        )
-#        return s
-#
-#    def __repr__(self):
-#        return str(self)
-#
-#    def eta(self):
-#        return self.p4().Eta()
-#
-#    def phi(self):
-#        return self.p4().Phi()
+class Particle(object):
+
+    def __init__(self, physObj):
+        self.physObj = physObj
+
+    def p4(self):
+        p4 = self.physObj.momentum()
+        return ROOT.TLorentzVector(p4.px(), p4.py(), p4.pz(), p4.e())
+
+    def is_final_state(self):
+        if not self.physObj.end_vertex() and self.physObj.status() == 1:
+            return True
+        return False
+
+    def is_me(self):
+        if self.physObj.momentum().perp() < MIN_PT:
+            return False
+        if self.physObj.production_vertex() != None:
+            if (self.physObj.production_vertex().id() == 1 and
+                self.physObj.status() == 3):
+                return True
+            elif (self.physObj.production_vertex().id() == 3 and
+                self.physObj.status() == 11):
+                return True
+        return False
+
+    def is_had(self):
+        if self.physObj.momentum().perp() < MIN_PT:
+            return False
+        if self.physObj.production_vertex() != None:
+            if (self.physObj.production_vertex().id() == 4 and
+                self.physObj.status() == 11):
+                return True
+        return False
+
+    def is_invisible(self):
+        return self.is_final_state() and abs(self.physObj.pdg_id()) in [12, 14, 16]
+
+    def is_lepton(self):
+        return abs(self.physObj.pdg_id()) in [11,13]
+
+    def get_parents(self):
+        pit = self.physObj.production_vertex().particles_begin(ROOT.HepMC.parents)
+        parents = []
+        while True:
+            pit = ROOT.Util.next_particle(pit)    
+            if pit == self.physObj.production_vertex().particles_end(ROOT.HepMC.parents):
+                break
+            p = Particle(ROOT.Util.get_particle(pit))
+            parents += [p]
+        return parents
+
+    def __str__(self):
+        s = "Particle(pdgId={0}, status={1}, prodVtx={2})".format(
+            self.physObj.pdg_id(),
+            self.physObj.status(),
+            self.physObj.production_vertex().id() if self.physObj.production_vertex() else None
+        )
+        return s
+
+    def __repr__(self):
+        return str(self)
+
+    def eta(self):
+        return self.p4().Eta()
+
+    def phi(self):
+        return self.p4().Phi()
 
 class GenJet:
     def __init__(self, p4):
@@ -191,24 +191,60 @@ class EventInterpretation(object):
         l_quarks (list): All the considered light quarks
         leptons (list): All the considered leptons
     """
+
+    SELECTION_FUNCTIONS = {
+        "sl_2w2h2t": lambda i: i.is_sl() and i.is_2w2h2t(),
+        "sl_1w2h2t": lambda i: i.is_sl() and i.is_1w2h2t(),
+        "sl_0w2h2t": lambda i: i.is_sl() and i.is_0w2h2t(),
+        "dl_0w2h2t": lambda i: i.is_dl() and i.is_0w2h2t(),
+    }
+
     def __init__(self, **kwargs):
         self.b_quarks = kwargs.get("b_quarks", [])
         self.l_quarks = kwargs.get("l_quarks", [])
         self.leptons = kwargs.get("leptons", [])
         self.invisible = kwargs.get("invisible", ROOT.TLorentzVector())
         self.hypo = kwargs.get("hypo")
+        self.selection_function = self.SELECTION_FUNCTIONS[kwargs.get("selection_function")]
+
+
+        if len(self.leptons) == 0:
+            self.fstate = ROOT.MEM.FinalState.HH
+        elif len(self.leptons) == 1:
+            self.fstate = ROOT.MEM.FinalState.LH
+        elif len(self.leptons) == 2:
+            self.fstate = ROOT.MEM.FinalState.LL
+
+        self.vars_to_integrate   = CvectorPSVar()
+        self.vars_to_marginalize = CvectorPSVar()
+
         self.result_tth = ROOT.MEM.MEMOutput()
         self.result_ttbb = ROOT.MEM.MEMOutput()
         self.was_calculated = False
 
+
+    def set_variables(self):
+        if self.is_sl() and self.hypo in ["0w2h2t", "1w2h2t"]:
+            set_integration_vars(
+                self.vars_to_integrate,
+                self.vars_to_marginalize,
+                [self.hypo]
+            )
+
     def is_sl(self):
         return len(self.leptons) == 1
+
+    def is_dl(self):
+        return len(self.leptons) == 2
 
     def is_0w2h2t(self):
         return len(self.b_quarks) >= 4
 
     def is_2w2h2t(self):
-        return len(self.b_quarks) >= 4 and len(self.l_quarks)>=2
+        return len(self.b_quarks) >= 4 and len(self.l_quarks) >= 2
+
+    def is_1w2h2t(self):
+        return len(self.b_quarks) >= 4 and len(self.l_quarks) >= 1
 
     def __str__(self):
         s = "Interpretation\n"
@@ -253,14 +289,14 @@ class PartonLevelAnalyzer(Analyzer):
 
         event.fstate_particles = filter(lambda x: x.is_final_state(), event.particles)
         event.quarks_me = filter(
-            lambda x: x.is_me() and abs(x.pdg_id()) in [1,2,3,4,5,21], event.particles
+            lambda x: x.is_me() and abs(x.physObj.pdg_id()) in [1,2,3,4,5,21], event.particles
         )
         event.b_quarks_me = filter(
-            lambda x: abs(x.pdg_id()) == 5,
+            lambda x: abs(x.physObj.pdg_id()) == 5,
             event.quarks_me
         )
         event.l_quarks_me = filter(
-            lambda x: abs(x.pdg_id()) in [1,2,3,4,21],
+            lambda x: abs(x.physObj.pdg_id()) in [1,2,3,4,21],
             event.quarks_me
         )
         event.interpretations["me_parton"] = EventInterpretation(
@@ -320,7 +356,7 @@ class HadronLevelAnalyzer(Analyzer):
             jet.matched_me_idx = -1
 
             if matches.has_key(jet) and matches[jet]:
-                jet.matched_me_pdgId = matches[jet].pdg_id()
+                jet.matched_me_pdgId = matches[jet].physObj.pdg_id()
                 jet.matched_me_idx = event.quarks_me.index(matches[jet])
         event.interpretations["hadron"].b_quarks = [x for x in filter(
             lambda x: abs(jet.matched_me_pdgId) == 5, event.jets
@@ -368,9 +404,6 @@ class MEMAnalyzer(Analyzer):
             self.default_cfg.cfg
         )
         self.logger = logging.getLogger("MEMAnalyzer")
-        self.configs = {
-            "default": self.default_cfg,
-        }
 
     @staticmethod
     def setup_cfg_default(conf):
@@ -386,105 +419,84 @@ class MEMAnalyzer(Analyzer):
         return cfg
 
     def process(self, event):
+
+        #Process all event interpretations
         for interp_name, interp in event.interpretations.items():
+            self.logger.info("process: inter={0} sel={1} {2},{3},{4} {5}".format(
+                interp_name,
+                interp.selection_function(interp),
+                len(interp.b_quarks), len(interp.l_quarks), len(interp.leptons),
+                interp.hypo
+            ))
+
+            if not interp.selection_function(interp):
+                continue
             self.logger.info("process: interp={0}".format(str(interp)))
 
             interp.result_tth = ROOT.MEM.MEMOutput()
             interp.result_ttbb = ROOT.MEM.MEMOutput()
 
-            cfg = self.configs[interp.mem_cfg]
-            self.integrator.set_cfg(cfg.cfg)
-            
-            if interp.is_sl():
+            self.integrator.set_cfg(getattr(interp, "mem_cfg", self.default_cfg).cfg)
 
-
-                self.logger.info(
-                    "process is_sl " +
-                    "calling MEM name={0} b={1} q={2}".format(
-                        interp_name,
-                        [q.p4().Pt() for q in interp.b_quarks],
-                        [q.p4().Pt() for q in interp.l_quarks]
-                    )
-                )
-
-                #Create an empty vector for the integration variables
-                vars_to_integrate   = CvectorPSVar()
-                vars_to_marginalize = CvectorPSVar()
-                
-                if interp.hypo == "0w2h2t":
-                    if not interp.is_0w2h2t():
-                        self.logger.info("Skipping hypo")
-                        continue
-                    set_integration_vars(
-                        vars_to_integrate,
-                        vars_to_marginalize,
-                        ["0w2h2t"]
-                    )
-                elif interp.hypo == "2w2h2t":
-                    if not interp.is_2w2h2t():
-                        self.logger.info("Skipping hypo")
-                        continue
-
-                for jet in interp.b_quarks:
-                    attach_jet_transfer_function(jet, self.tf_formula)
-                    add_obj(
-                        self.integrator,
-                        ROOT.MEM.ObjectType.Jet,
-                        p4s=(jet.p4().Pt(), jet.p4().Eta(), jet.p4().Phi(), jet.p4().M()),
-                        obs_dict={
-                            ROOT.MEM.Observable.BTAG: 1,
-                            },
-                        tf_dict={
-                            ROOT.MEM.TFType.bReco: jet.tf_b,
-                            ROOT.MEM.TFType.qReco: jet.tf_l,
-                        }
-                    )
-                for jet in interp.l_quarks:
-                    attach_jet_transfer_function(jet, self.tf_formula)
-                    add_obj(
-                        self.integrator,
-                        ROOT.MEM.ObjectType.Jet,
-                        p4s=(jet.p4().Pt(), jet.p4().Eta(), jet.p4().Phi(), jet.p4().M()),
-                        obs_dict={
-                            ROOT.MEM.Observable.BTAG: 0,
-                            },
-                        tf_dict={
-                            ROOT.MEM.TFType.bReco: jet.tf_b,
-                            ROOT.MEM.TFType.qReco: jet.tf_l,
-                        }
-                    )
-                for lep in interp.leptons:
-                    add_obj(
-                        self.integrator,
-                        ROOT.MEM.ObjectType.Lepton,
-                        p4s=(lep.p4().Pt(), lep.p4().Eta(), lep.p4().Phi(), lep.p4().M()),
-                        obs_dict={ROOT.MEM.Observable.CHARGE: 1.0 if lep.pdg_id()>0 else -1.0},
-                    )
-
+            for jet in interp.b_quarks:
+                attach_jet_transfer_function(jet, self.tf_formula)
                 add_obj(
                     self.integrator,
-                    ROOT.MEM.ObjectType.MET,
-                    p4s=(interp.invisible.Pt(), 0, interp.invisible.Phi(), 0),
+                    ROOT.MEM.ObjectType.Jet,
+                    p4s=(jet.p4().Pt(), jet.p4().Eta(), jet.p4().Phi(), jet.p4().M()),
+                    obs_dict={
+                        ROOT.MEM.Observable.BTAG: 1,
+                        },
+                    tf_dict={
+                        ROOT.MEM.TFType.bReco: jet.tf_b,
+                        ROOT.MEM.TFType.qReco: jet.tf_l,
+                    }
                 )
-                
-                results = {}
-                for hypo in [
-                    ROOT.MEM.Hypothesis.TTH,
-                    ROOT.MEM.Hypothesis.TTBB]:
-                    self.logger.info("Evaluating hypo={0}".format(hypo))
-                    fstate = ROOT.MEM.FinalState.LH
-                    ret = self.integrator.run(
-                        fstate,
-                        hypo,
-                        vars_to_integrate,
-                        vars_to_marginalize
-                    )
-                    self.logger.info("p={0}".format(ret.p))
-                    results[hypo] = ret
-                interp.was_calculated = True
-                interp.result_tth = results[ROOT.MEM.Hypothesis.TTH]
-                interp.result_ttbb = results[ROOT.MEM.Hypothesis.TTBB]
-                self.integrator.next_event()
+            for jet in interp.l_quarks:
+                attach_jet_transfer_function(jet, self.tf_formula)
+                add_obj(
+                    self.integrator,
+                    ROOT.MEM.ObjectType.Jet,
+                    p4s=(jet.p4().Pt(), jet.p4().Eta(), jet.p4().Phi(), jet.p4().M()),
+                    obs_dict={
+                        ROOT.MEM.Observable.BTAG: 0,
+                        },
+                    tf_dict={
+                        ROOT.MEM.TFType.bReco: jet.tf_b,
+                        ROOT.MEM.TFType.qReco: jet.tf_l,
+                    }
+                )
+            for lep in interp.leptons:
+                add_obj(
+                    self.integrator,
+                    ROOT.MEM.ObjectType.Lepton,
+                    p4s=(lep.p4().Pt(), lep.p4().Eta(), lep.p4().Phi(), lep.p4().M()),
+                    obs_dict={ROOT.MEM.Observable.CHARGE: 1.0 if lep.physObj.pdg_id()>0 else -1.0},
+                )
+
+            add_obj(
+                self.integrator,
+                ROOT.MEM.ObjectType.MET,
+                p4s=(interp.invisible.Pt(), 0, interp.invisible.Phi(), 0),
+            )
+            
+            results = {}
+            for me_hypo in [
+                ROOT.MEM.Hypothesis.TTH,
+                ROOT.MEM.Hypothesis.TTBB]:
+                self.logger.debug("Evaluating hypo={0}".format(me_hypo))
+                ret = self.integrator.run(
+                    interp.fstate,
+                    me_hypo,
+                    interp.vars_to_integrate,
+                    interp.vars_to_marginalize
+                )
+                self.logger.debug("p={0}".format(ret.p))
+                results[me_hypo] = ret
+            interp.was_calculated = True
+            interp.result_tth = results[ROOT.MEM.Hypothesis.TTH]
+            interp.result_ttbb = results[ROOT.MEM.Hypothesis.TTBB]
+            self.integrator.next_event()
 
         return True
 
@@ -502,7 +514,7 @@ genLepType = NTupleObjectType("genLepType", variables = [
     NTupleVariable("eta", lambda x : x.p4().Eta()),
     NTupleVariable("phi", lambda x : x.p4().Phi()),
     NTupleVariable("mass", lambda x : x.p4().M()),
-    NTupleVariable("pdgId", lambda x : x.pdg_id(), type=int),
+    NTupleVariable("pdgId", lambda x : x.physObj.pdg_id(), type=int),
 ])
 
 genParticleType = NTupleObjectType("genParticleType", variables = [
@@ -510,8 +522,8 @@ genParticleType = NTupleObjectType("genParticleType", variables = [
     NTupleVariable("eta", lambda x : x.p4().Eta()),
     NTupleVariable("phi", lambda x : x.p4().Phi()),
     NTupleVariable("mass", lambda x : x.p4().M()),
-    NTupleVariable("pdgId", lambda x : x.pdg_id(), type=int),
-    NTupleVariable("status", lambda x : x.status(), type=int),
+    NTupleVariable("pdgId", lambda x : x.physObj.pdg_id(), type=int),
+    NTupleVariable("status", lambda x : x.physObj.status(), type=int),
 ])
 
 metType = NTupleObjectType("metType", variables = [
