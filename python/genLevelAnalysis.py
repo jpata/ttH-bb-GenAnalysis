@@ -198,6 +198,14 @@ class EventInterpretation(object):
         "sl_0w2h2t": lambda i: i.is_sl() and i.is_0w2h2t(),
         "dl_0w2h2t": lambda i: i.is_dl() and i.is_0w2h2t(),
     }
+    INTEGRATION_VARS = {
+        "sl_0w2h2t": [
+            ROOT.MEM.PSVar.cos_q1, ROOT.MEM.PSVar.phi_q1, ROOT.MEM.PSVar.cos_qbar1, ROOT.MEM.PSVar.phi_qbar1
+        ],
+        "sl_1w2h2t": [
+            ROOT.MEM.PSVar.cos_q1, ROOT.MEM.PSVar.phi_q1
+        ]
+    }
 
     def __init__(self, **kwargs):
         self.b_quarks = kwargs.get("b_quarks", [])
@@ -217,6 +225,9 @@ class EventInterpretation(object):
 
         self.vars_to_integrate   = CvectorPSVar()
         self.vars_to_marginalize = CvectorPSVar()
+
+        for integ in self.INTEGRATION_VARS.get(kwargs.get("selection_function"), []):
+            self.vars_to_integrate.push_back(integ)
 
         self.result_tth = ROOT.MEM.MEMOutput()
         self.result_ttbb = ROOT.MEM.MEMOutput()
@@ -505,8 +516,8 @@ genJetType = NTupleObjectType("genJetType", variables = [
     NTupleVariable("eta", lambda x : x.p4().Eta()),
     NTupleVariable("phi", lambda x : x.p4().Phi()),
     NTupleVariable("mass", lambda x : x.p4().M()),
-    NTupleVariable("matched_me_pdgId", lambda x : x.matched_me_pdgId, type=int),
-    NTupleVariable("matched_me_idx", lambda x : x.matched_me_idx, type=int),
+    NTupleVariable("matched_me_pdgId", lambda x : x.matched_me_pdgId, the_type=int),
+    NTupleVariable("matched_me_idx", lambda x : x.matched_me_idx, the_type=int),
 ])
 
 genLepType = NTupleObjectType("genLepType", variables = [
@@ -514,7 +525,7 @@ genLepType = NTupleObjectType("genLepType", variables = [
     NTupleVariable("eta", lambda x : x.p4().Eta()),
     NTupleVariable("phi", lambda x : x.p4().Phi()),
     NTupleVariable("mass", lambda x : x.p4().M()),
-    NTupleVariable("pdgId", lambda x : x.physObj.pdg_id(), type=int),
+    NTupleVariable("pdgId", lambda x : x.physObj.pdg_id(), the_type=int),
 ])
 
 genParticleType = NTupleObjectType("genParticleType", variables = [
@@ -522,8 +533,8 @@ genParticleType = NTupleObjectType("genParticleType", variables = [
     NTupleVariable("eta", lambda x : x.p4().Eta()),
     NTupleVariable("phi", lambda x : x.p4().Phi()),
     NTupleVariable("mass", lambda x : x.p4().M()),
-    NTupleVariable("pdgId", lambda x : x.physObj.pdg_id(), type=int),
-    NTupleVariable("status", lambda x : x.physObj.status(), type=int),
+    NTupleVariable("pdgId", lambda x : x.physObj.pdg_id(), the_type=int),
+    NTupleVariable("status", lambda x : x.physObj.status(), the_type=int),
 ])
 
 metType = NTupleObjectType("metType", variables = [
@@ -534,10 +545,10 @@ metType = NTupleObjectType("metType", variables = [
 ])
 
 interp_type = NTupleObjectType("interp_type", variables = [
-    NTupleVariable("was_calculated", lambda x : x.was_calculated, type=int),
-    NTupleVariable("n_b", lambda x : len(x.b_quarks), type=int),
-    NTupleVariable("n_q", lambda x : len(x.l_quarks), type=int),
-    NTupleVariable("n_l", lambda x : len(x.leptons), type=int),
+    NTupleVariable("was_calculated", lambda x : x.was_calculated, the_type=int),
+    NTupleVariable("n_b", lambda x : len(x.b_quarks), the_type=int),
+    NTupleVariable("n_q", lambda x : len(x.l_quarks), the_type=int),
+    NTupleVariable("n_l", lambda x : len(x.leptons), the_type=int),
 
     NTupleVariable("mem_p_tth", lambda x : x.result_tth.p),
     NTupleVariable("mem_p_ttbb", lambda x : x.result_ttbb.p),
@@ -554,8 +565,8 @@ def fillCoreVariables(self, tr, event, isMC):
     else:
         for x in ["run", "lumi", "evt"]:
             tr.fill(x, getattr(event.input, x))
-    tr.fill("isData", not isMC)
-    tr.fill("intLumi", 0)
+    #tr.fill("isData", not isMC)
+    #tr.fill("intLumi", 0)
 
 AutoFillTreeProducer.fillCoreVariables = fillCoreVariables
 
