@@ -11,10 +11,11 @@ from TTH.MEAnalysis.MEMUtils import set_integration_vars, add_obj
 from TTH.MEAnalysis.samples_base import getSitePrefix
 from PhysicsTools.HeppyCore.framework.analyzer import Analyzer
 from PhysicsTools.Heppy.analyzers.core.AutoFillTreeProducer import *
-from TTH.GenLevel.genLevelAnalysis import MEMAnalyzer, EventInterpretation, interp_type, conf, genParticleType, fillCoreVariables
+from TTH.GenLevel.genLevelAnalysis import MEMAnalyzer, EventInterpretation, interp_type, conf, genParticleType, genJetType, fillCoreVariables
 from PhysicsTools.HeppyCore.utils.deltar import matchObjectCollection
 from PhysicsTools.HeppyCore.framework.analyzer import Analyzer
 from TTH.MEAnalysis.VHbbTree import *
+
 
 class EventAnalyzer(Analyzer):
     def __init__(self, cfg_ana, cfg_comp, looperName):
@@ -40,15 +41,17 @@ class Particle:
         p4 = ROOT.TLorentzVector()
         p4.SetPtEtaPhiM(obj.pt, obj.eta, obj.phi, obj.mass)
         return Particle(
-            _p4=p4,
+            _p4 = p4,
             _pdg_id = obj.pdgId,
             _status = obj.status,
+            numBHadrons = getattr(obj, "numBHadrons", -99),
+            numCHadrons = getattr(obj, "numCHadrons", -99),
             _parent_id = parent_id
         )
 
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
-        self.physObj = self
+        #self.physObj = self
 
     def is_final_state(self):
         return True
@@ -58,6 +61,16 @@ class Particle:
 
     def p4(self):
         return self._p4
+
+    def set_p4(self, new_p4):
+        self._p4 = new_p4
+
+    def rescale_pt(self, pt_new):
+        pt_old = self.p4().Pt()
+        m_old = self.p4().M()
+        p4_new = ROOT.TLorentzVector()
+        p4_new.SetPtEtaPhiM(pt_new, self.p4().Eta(), self.p4().Phi(), pt_new/pt_old * m_old)
+        self.set_p4(p4_new)
 
     def eta(self):
         return self.p4().Eta()
@@ -78,7 +91,6 @@ class Particle:
         )
         return s
 
-
 class EventRepresentation:
     """This summarizes the reco content of an event, which may be 'perturbed' under
     systematics.
@@ -94,6 +106,44 @@ class EventRepresentation:
         self.l_quarks = kwargs.get("l_quarks", [])
         self.leptons = kwargs.get("leptons", [])
         self.invisible = kwargs.get("invisible", ROOT.TLorentzVector())
+
+
+    @staticmethod
+    def make_jet_tf(pt, res=0.1):
+         """Returns a gaussian PDF for the jet momentum f(ptreco | ptgen) with
+         x: reco-pt
+         par 0: gen-pt
+         par 1: multiplicative resolution
+         
+         Args:
+             pt (float): jet momentum
+             res (float, optional): Jet resolution as a fraction of momentum
+         
+         Returns:
+             TF1: transfer function
+         """
+         f = ROOT.TF1("jet_tf", "1.0/([0]*[1]*sqrt(2*3.14159264))*exp(-0.5*TMath::Power(((x-[0])/([0]*[1])), 2))", 0, 10000)
+         f.SetParameter(0, pt)
+         f.SetParameter(1, res)
+         return f
+
+    @staticmethod
+    def make_met_tf(pt_x, pt_y, res=0.3):
+        f = ROOT.TF2("met_tf", "1.0/([0]*[1]*sqrt(2*3.14159264))*exp(-0.5*TMath::Power(((x-[2])/[0]), 2))*exp(-0.5*TMath::Power(((x-[3])/[1]), 2))", 0, 10000, 0, 10000)
+        f.SetParameter(0, res*pt_x)
+        f.SetParameter(1, res*pt_y)
+        f.SetParameter(2, pt_x)
+        f.SetParameter(3, pt_y)
+        return f
+
+
+    def smear_quarks(self):
+        for q in self.b_quarks + self.l_quarks:
+            f = self.make_jet_tf(q.p4().Pt())
+            pt_new = f.GetRandom()
+            logging.debug("rescaling pt {0} -> {1}".format(q.p4().Pt(), pt_new))
+            q.rescale_pt(pt_new)
+            q.tf = f
 
     def perturb_momentum(self, scale={}, res={}):
         """Changes object momentum of objects in both scale (deterministic multiplicative) and resolution (random multiplicative)
@@ -166,8 +216,6 @@ class EventRepresentation:
         Returns:
             TYPE: Description
         """
-        kwargs["b_quarks"] = self.b_quarks
-        kwargs["leptons"] = self.leptons
         if hypo == "0w2h2t":
             interp = EventInterpretation(
                 b_quarks = self.b_quarks,
@@ -186,7 +234,7 @@ class EventRepresentation:
                 selection_function = selection_func
             )
 
-        interp.mem_cfg = MEMAnalyzer.setup_cfg_default(conf)
+        #interp.mem_cfg = MEMAnalyzer.setup_cfg_default(conf)
         return interp
 
 class GenQuarkLevelAnalyzer(Analyzer):
@@ -207,6 +255,10 @@ class GenQuarkLevelAnalyzer(Analyzer):
         event.gen_b_others = map(lambda p: Particle.from_obj(p, 0), event.GenStatus2bHad)
         event.gen_q_w = map(lambda p: Particle.from_obj(p, 24), event.GenWZQuark)
         event.gen_lep = map(lambda p: Particle.from_obj(p, 6), event.GenLepFromTop)
+        event.gen_lep = filter(
+            lambda x, conf=self.conf: x.p4().Pt() > conf["leptons"]["pt"] and abs(x.p4().Eta()) < conf["leptons"]["eta"],
+            event.gen_lep
+        )
         event.gen_nu = map(lambda p: Particle.from_obj(p, 6), event.GenNuFromTop)
         event.gen_met = sum([p.p4() for p in event.gen_nu], ROOT.TLorentzVector())
         self.logger.info("process "
@@ -251,11 +303,18 @@ class GenQuarkLevelAnalyzer(Analyzer):
 
         #create a quark-level representation
         event.repr_quarks = EventRepresentation(
-            b_quarks = event.b_hadrons_sorted[:6],
-            l_quarks = event.gen_q_w,
+            b_quarks = event.b_hadrons_sorted[:4],
+            l_quarks = event.gen_q_w[:2],
             leptons = event.gen_lep,
             invisible = event.gen_met,
         )
+
+        event.repr_quarks_smeared = copy.deepcopy(event.repr_quarks)
+        event.repr_quarks_smeared.smear_quarks()
+
+
+        event.interpretations["gen_quark_2w2h2t"] = event.repr_quarks.make_interpretation("2w2h2t", self.conf, "sl_2w2h2t")
+        event.interpretations["gen_quark_2w2h2t_smeared"] = event.repr_quarks_smeared.make_interpretation("2w2h2t", self.conf, "sl_2w2h2t")
 
         #create the 022 and 222 interpretations on the quark level
         #event.interpretations["gen_b_quark"] = event.repr_quarks.make_interpretation("0w2h2t", self.conf, "sl_0w2h2t")
@@ -278,13 +337,10 @@ class GenJetLevelAnalyzer(Analyzer):
     def process(self, event):
         #get all the gen-jet
         event.gen_jet = map(lambda p: Particle.from_obj(p, 0), event.GenJet)
-
-        match_count = {
-            "t": 0,
-            "h": 0,
-            "w": 0,
-            "other": 0,
-        }
+        event.gen_jet = filter(
+            lambda x, conf=conf: x.p4().Pt() > conf["jets"]["pt"] and abs(x.p4().Eta()) < conf["jets"]["eta"],
+            event.gen_jet
+        )
 
         #match b-quarks to gen-jets by deltaR
         matches = matchObjectCollection(event.b_hadrons_sorted, event.gen_jet, 0.3)
@@ -304,7 +360,7 @@ class GenJetLevelAnalyzer(Analyzer):
                     "b-quark with pt={0:.2f} not matched to gen-jet".format(p.p4().Pt())
                 )
 
-        #match light jets to quarks from W
+        #find jets matched to light quarks
         matches = matchObjectCollection(event.gen_q_w, event.gen_jet, 0.3)
         event.matched_q_jets = []
         for p in event.gen_q_w:
@@ -316,6 +372,19 @@ class GenJetLevelAnalyzer(Analyzer):
                     p.p4().Pt(), p.pdg_id(), matches[p].p4().Pt(), matches[p].pdg_id())
                 )
 
+        #find unmatched jets
+        event.unmatched_jets = []
+        for jet in event.gen_jet:
+            if jet not in event.matched_b_jets and jet not in event.matched_q_jets:
+                event.unmatched_jets += [jet]
+
+        #count number of jets matched to quarks from certain origin
+        match_count = {
+            "t": 0,
+            "h": 0,
+            "w": 0,
+            "other": 0,
+        }
         for jet in event.matched_b_jets + event.matched_q_jets:
             match_count[jet.source] += 1
         event.match_count = match_count
@@ -323,35 +392,19 @@ class GenJetLevelAnalyzer(Analyzer):
 
         #Creates a jet-level representation
         event.repr_matched_jets = EventRepresentation(
-            b_quarks = event.matched_b_jets,
-            l_quarks = event.matched_q_jets,
+            b_quarks = event.matched_b_jets[:4],
+            l_quarks = event.matched_q_jets[:2],
             leptons = event.gen_lep,
             invisible = event.gen_met,
         )
 
-        #Create the standard 022 and 222 jet-level interpretations
-        #event.interpretations["gen_b_jet"] = event.repr_matched_jets.make_interpretation("0w2h2t", self.conf, "sl_0w2h2t")
-        #event.interpretations["gen_b_q_jet"] = event.repr_matched_jets.make_interpretation("2w2h2t", self.conf, "sl_2w2h2t")
 
-        #Variate JER
-        event.repr_matched_jets_jer10 = copy.deepcopy(event.repr_matched_jets)
-        event.repr_matched_jets_jer10.perturb_momentum(
-            res = {"b_quarks": 0.1, "l_quarks": 0.1}
-        )
-        #event.interpretations["gen_b_q_jet_jer10"] = event.repr_matched_jets_jer10.make_interpretation("2w2h2t", self.conf, "sl_2w2h2t")
+        event.repr_matched_jets_smeared = copy.deepcopy(event.repr_quarks)
+        event.repr_matched_jets_smeared.smear_quarks()
 
-        #Variate jet scale
-        event.repr_matched_jets_jes10 = copy.deepcopy(event.repr_matched_jets)
-        event.repr_matched_jets_jes10.perturb_momentum(
-            scale = {"b_quarks": 0.1, "l_quarks": 0.1}
-        )
-        #event.interpretations["gen_b_q_jet_jes10"] = event.repr_matched_jets_jes10.make_interpretation("2w2h2t", self.conf, "sl_2w2h2t")
+        event.interpretations["gen_jet_matched_2w2h2t"] = event.repr_matched_jets.make_interpretation("2w2h2t", self.conf, "sl_2w2h2t")
+        event.interpretations["gen_jet_matched_2w2h2t_smeared"] = event.repr_matched_jets_smeared.make_interpretation("2w2h2t", self.conf, "sl_2w2h2t")
 
-        #Variate jet flavour tagging
-        event.repr_matched_jets_flavour = copy.deepcopy(event.repr_matched_jets)
-        event.repr_matched_jets_flavour.perturb_flavour(
-            effs = {"b": 0.7, "l": 0.01, "c": 0.2}
-        )
         #event.interpretations["gen_b_q_jet_flavour"] = event.repr_matched_jets_flavour.make_interpretation("2w2h2t", self.conf, "sl_2w2h2t")
         return True
 
@@ -376,7 +429,7 @@ if __name__ == "__main__":
 
     import PhysicsTools.HeppyCore.framework.config as cfg
 
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.ERROR)
 
     event_ana = cfg.Analyzer(
         EventAnalyzer,
@@ -410,12 +463,16 @@ if __name__ == "__main__":
         verbose = True,
         vectorTree = True,
         globalVariables = [
+            NTupleVariable("ttCls",  lambda ev: getattr(ev, "ttCls", -1), float,mcOnly=True, help="ttbar classification via GenHFHadronMatcher"),
         ],
         globalObjects = {
-            # "interp_gen_b_quark" : NTupleObject("I_sl_0w2h2t_q", interp_type, help="only 4 b-quarks interpretation"),
-            # "interp_gen_b_q_quark" : NTupleObject("I_sl_2w2h2t_q", interp_type, help="4 b-quarks, 2 light quarks interpretation"),
+            #"interp_gen_b_quark" : NTupleObject("I_sl_0w2h2t_q", interp_type, help="only 4 b-quarks interpretation"),
+            #"interp_gen_b_quark_smeared" : NTupleObject("I_sl_0w2h2t_q_smear", interp_type, help="only 4 b-quarks interpretation"),
+            #"interp_gen_quark_2w2h2t" : NTupleObject("I_sl_2w2h2t_q", interp_type, help="4 b-quarks, 2 light quarks interpretation"),
+            #"interp_gen_quark_2w2h2t_smeared" : NTupleObject("I_sl_2w2h2t_q_smeared", interp_type, help="4 b-quarks, 2 light quarks interpretation, TF-smeared"),
             # "interp_gen_b_jet" : NTupleObject("I_sl_0w2h2t_j", interp_type, help="only 4 b-jet interpretation, matched to b-quarks"),
-            # "interp_gen_b_q_jet" : NTupleObject("I_sl_2w2h2t_j", interp_type, help="4 b-quarks, 2 light quarks interpretation"),
+            #"interp_gen_jet_matched_2w2h2t" : NTupleObject("I_sl_2w2h2t_j_matched", interp_type, help="4 b-quarks, 2 light quarks interpretation"),
+            #"interp_gen_jet_matched_2w2h2t_smeared" : NTupleObject("I_sl_2w2h2t_j_matched_smeared", interp_type, help="4 b-quarks, 2 light quarks interpretation"),
             # "interp_gen_b_q_jet_jer10" : NTupleObject("I_sl_2w2h2t_j_jer10", interp_type, help="only 4 b-jet interpretation, matched to b-quarks"),
             # "interp_gen_b_q_jet_jes10" : NTupleObject("I_sl_2w2h2t_j_jes10", interp_type, help="only 4 b-jet interpretation, matched to b-quarks"),
             # "interp_gen_b_q_jet_flavour" : NTupleObject("I_sl_2w2h2t_j_flavour", interp_type, help="only 4 b-jet interpretation, matched to b-quarks"),
@@ -425,10 +482,14 @@ if __name__ == "__main__":
             "gen_b_h" : NTupleCollection("gen_b_h", genParticleType, 4, help="generated quarks from H"),
             "gen_b_t" : NTupleCollection("gen_b_t", genParticleType, 4, help="generated quarks from top"),
             "gen_b_others_cleaned" : NTupleCollection("gen_b_others", genParticleType, 4, help="generated b-quarks from other sources"),
+            "gen_q_w" : NTupleCollection("gen_q_w", genParticleType, 8, help="generated quarks from W/Z"),
             "b_hadrons_sorted" : NTupleCollection("gen_b", genParticleType, 4, help="all chosen generated b-quarks"),
-            "gen_lep" : NTupleCollection("gen_lep", genParticleType, 4, help="generated leptons"),
-            "matched_b_jets" : NTupleCollection("gen_jets_b", genParticleType, 8, help="gen-jets matched to b-quarks"),
-            "matched_q_jets" : NTupleCollection("gen_jets_q", genParticleType, 8, help="gen-jets matched to light quarks"),
+
+            "gen_lep" : NTupleCollection("gen_lep", genParticleType, 4, help="generated leptons after selection"),
+            "gen_jet": NTupleCollection("gen_jet", genParticleType, 20, help="generated jets after selection"),
+#            "matched_b_jets" : NTupleCollection("gen_jets_b", genJetType, 8, help="gen-jets matched to b-quarks"),
+#            "matched_q_jets" : NTupleCollection("gen_jets_q", genJetType, 8, help="gen-jets matched to light quarks"),
+#            "unmatched_jets" : NTupleCollection("gen_jets_unmatched", genJetType, 8, help="gen-jets not matched to quarks"),
         },
     )
 
@@ -455,20 +516,21 @@ if __name__ == "__main__":
         dataset = os.environ["DATASETPATH"]
         firstEvent = int(os.environ["SKIP_EVENTS"])
         nEvents = int(os.environ["MAX_EVENTS"])
-    else:
+    elif os.environ.get("SAMPLE", "tth") == "tth":
         fns = map(getSitePrefix, ["/store/user/jpata/tth/Sep29_v1/ttHTobb_M125_TuneCUETP8M2_ttHtranche3_13TeV-powheg-pythia8/Sep29_v1/160930_103104/0000/tree_1.root"])
         dataset = "ttHTobb_M125_TuneCUETP8M2_ttHtranche3_13TeV-powheg-pythia8"
         firstEvent = 0
+        nEvents = 100
+    elif os.environ.get("SAMPLE", "tth") == "ttjets":
+        fns = map(getSitePrefix, ["/store/user/jpata/tth/Sep29_v1/TTToSemilepton_TuneCUETP8M2_ttHtranche3_13TeV-powheg-pythia8/Sep29_v1/161005_125253/0000/tree_1.root"])
+        dataset = "TTToSemilepton_TuneCUETP8M2_ttHtranche3_13TeV-powheg-pythia8"
+        firstEvent = 0
         nEvents = 1000
 
-        # fns = map(getSitePrefix, ["/store/user/jpata/tth/Sep29_v1/TTToSemilepton_TuneCUETP8M2_ttHtranche3_13TeV-powheg-pythia8/Sep29_v1/161005_125253/0000/tree_1.root"])
-        # dataset = "TTToSemilepton_TuneCUETP8M2_ttHtranche3_13TeV-powheg-pythia8"
-        # firstEvent = 0
-        # nEvents = 10000
-
+    print "files", fns
     config = cfg.Config(
         #Run across these inputs
-        components = [cfg.Component(
+        components = [cfg.MCComponent(
             dataset,
             files = fns,
             tree_name = "vhbb/tree",
@@ -483,7 +545,18 @@ if __name__ == "__main__":
         config,
         nPrint = 0,
         firstEvent = firstEvent,
-        nEvents = nEvents
+        nEvents = nEvents,
     )
     looper.loop()
     looper.write()
+
+    tf = ROOT.TFile.Open("{0}/tree.root".format(looper.name), "UPDATE")
+    for fn in fns:
+        inf = ROOT.TFile.Open(fn)
+        hcount = inf.Get("vhbb/Count")
+        tf.cd()
+        if tf.Get("Count") == None:
+            hcount.Clone()
+        else:
+            tf.Get("Count").Add(hcount)
+        inf.Close()

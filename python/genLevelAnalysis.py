@@ -50,18 +50,18 @@ class Conf(dict):
 conf = Conf()
 conf["jets"] = {
     "pt": 20,
-    "eta": 2.1,
+    "eta": 2.4,
     "pt_clustering": 10,
     "def":  "ROOT.fastjet.JetDefinition(ROOT.fastjet.antikt_algorithm, 0.5)"
 }
 
 conf["leptons"] = {
     "pt": 30,
-    "eta": 2.1
+    "eta": 2.4
 }
 
 conf["mem"] = {
-"n_integration_points_mult": 0.1
+"n_integration_points_mult": 1.0
 }
 
 conf["tf_matrix"] = tf_matrix
@@ -367,7 +367,7 @@ class HadronLevelAnalyzer(Analyzer):
             jet.matched_me_idx = -1
 
             if matches.has_key(jet) and matches[jet]:
-                jet.matched_me_pdgId = matches[jet].physObj.pdg_id()
+                jet.matched_me_pdgId = matches[jet].pdg_id()
                 jet.matched_me_idx = event.quarks_me.index(matches[jet])
         event.interpretations["hadron"].b_quarks = [x for x in filter(
             lambda x: abs(jet.matched_me_pdgId) == 5, event.jets
@@ -450,7 +450,11 @@ class MEMAnalyzer(Analyzer):
             self.integrator.set_cfg(getattr(interp, "mem_cfg", self.default_cfg).cfg)
 
             for jet in interp.b_quarks:
-                attach_jet_transfer_function(jet, self.tf_formula)
+                if hasattr(jet, "tf"):
+                    jet.tf_b = jet.tf
+                    jet.tf_l = jet.tf
+                else:
+                    attach_jet_transfer_function(jet, self.tf_formula)
                 add_obj(
                     self.integrator,
                     ROOT.MEM.ObjectType.Jet,
@@ -464,7 +468,11 @@ class MEMAnalyzer(Analyzer):
                     }
                 )
             for jet in interp.l_quarks:
-                attach_jet_transfer_function(jet, self.tf_formula)
+                if hasattr(jet, "tf"):
+                    jet.tf_b = jet.tf
+                    jet.tf_l = jet.tf
+                else:
+                    attach_jet_transfer_function(jet, self.tf_formula)
                 add_obj(
                     self.integrator,
                     ROOT.MEM.ObjectType.Jet,
@@ -482,7 +490,7 @@ class MEMAnalyzer(Analyzer):
                     self.integrator,
                     ROOT.MEM.ObjectType.Lepton,
                     p4s=(lep.p4().Pt(), lep.p4().Eta(), lep.p4().Phi(), lep.p4().M()),
-                    obs_dict={ROOT.MEM.Observable.CHARGE: 1.0 if lep.physObj.pdg_id()>0 else -1.0},
+                    obs_dict={ROOT.MEM.Observable.CHARGE: 1.0 if lep.pdg_id()>0 else -1.0},
                 )
 
             add_obj(
@@ -496,6 +504,7 @@ class MEMAnalyzer(Analyzer):
                 ROOT.MEM.Hypothesis.TTH,
                 ROOT.MEM.Hypothesis.TTBB]:
                 self.logger.debug("Evaluating hypo={0}".format(me_hypo))
+                #ret = ROOT.MEM.MEMOutput() 
                 ret = self.integrator.run(
                     interp.fstate,
                     me_hypo,
@@ -516,8 +525,10 @@ genJetType = NTupleObjectType("genJetType", variables = [
     NTupleVariable("eta", lambda x : x.p4().Eta()),
     NTupleVariable("phi", lambda x : x.p4().Phi()),
     NTupleVariable("mass", lambda x : x.p4().M()),
-    NTupleVariable("matched_me_pdgId", lambda x : x.matched_me_pdgId, the_type=int),
-    NTupleVariable("matched_me_idx", lambda x : x.matched_me_idx, the_type=int),
+    NTupleVariable("pdgId", lambda x : x.pdg_id(), the_type=int),
+    NTupleVariable("status", lambda x : x.status(), the_type=int),
+    NTupleVariable("numBHadrons", lambda x: getattr(x, "numBHadrons", -99), the_type=int),
+    NTupleVariable("numCHadrons", lambda x: getattr(x, "numCHadrons", -99), the_type=int),
 ])
 
 genLepType = NTupleObjectType("genLepType", variables = [
@@ -525,7 +536,7 @@ genLepType = NTupleObjectType("genLepType", variables = [
     NTupleVariable("eta", lambda x : x.p4().Eta()),
     NTupleVariable("phi", lambda x : x.p4().Phi()),
     NTupleVariable("mass", lambda x : x.p4().M()),
-    NTupleVariable("pdgId", lambda x : x.physObj.pdg_id(), the_type=int),
+    NTupleVariable("pdgId", lambda x : x.pdg_id(), the_type=int),
 ])
 
 genParticleType = NTupleObjectType("genParticleType", variables = [
@@ -533,8 +544,8 @@ genParticleType = NTupleObjectType("genParticleType", variables = [
     NTupleVariable("eta", lambda x : x.p4().Eta()),
     NTupleVariable("phi", lambda x : x.p4().Phi()),
     NTupleVariable("mass", lambda x : x.p4().M()),
-    NTupleVariable("pdgId", lambda x : x.physObj.pdg_id(), the_type=int),
-    NTupleVariable("status", lambda x : x.physObj.status(), the_type=int),
+    NTupleVariable("pdgId", lambda x : x.pdg_id(), the_type=int),
+    NTupleVariable("status", lambda x : x.status(), the_type=int),
 ])
 
 metType = NTupleObjectType("metType", variables = [
